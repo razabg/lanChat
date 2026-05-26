@@ -1,0 +1,17 @@
+# Compiled binaries
+
+
+# Object files
+*.o
+
+# Dependency files
+*.d
+
+# valgrind output
+vgcore.*
+callgrind.out.*
+
+# Editor
+.vscode/
+*.swp
+*~
