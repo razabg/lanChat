@@ -1,5 +1,6 @@
 #include "protocol.h"
 #include <string.h>
+#include <arpa/inet.h>
 
 /* ─── tlv_encode ───────────────────────────────────────────────────────────
    Writes a single TLV unit into buf:
@@ -15,10 +16,10 @@ int tlv_encode(uint8_t *buf, size_t buf_size, uint8_t tag,
     if (buf_size < (size_t)(TLV_HEADER_SIZE + value_len))
         return -1;
 
+    uint16_t net_len = htons(value_len);
+
     buf[0] = tag;
-    buf[1] = (value_len >> 8) & 0xFF; /* high byte of length */
-    buf[2] = value_len & 0xFF;        /* low byte of length  */
-    // we do it because we need to convert little endian to big endian
+    memcpy(buf + TLV_TAG_SIZE, &net_len, TLV_LENGTH_SIZE);
 
     if (value_len > 0)
         memcpy(buf + TLV_HEADER_SIZE, value, value_len);
@@ -40,7 +41,9 @@ int tlv_encode(uint8_t *buf, size_t buf_size, uint8_t tag,
         return -1;
 
     uint8_t tag = buf[0];
-    uint16_t value_len = ((uint16_t)buf[1] << 8) | buf[2]; /* big endian → host */
+    uint16_t net_len;
+    memcpy(&net_len, buf + TLV_TAG_SIZE, TLV_LENGTH_SIZE);
+    uint16_t value_len = ntohs(net_len);  /* big endian → host */
 
     if (buf_len < (size_t)(TLV_HEADER_SIZE + value_len))
         return -1;
