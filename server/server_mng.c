@@ -32,7 +32,7 @@ static void send_group_resp(int client_id, uint8_t resp_tag, const char *mc_ip, 
 int ServerMng_Create(int port)
 {
     if (UserMng_Create() < 0)  return -1;
-    if (GroupMng_Create() < 0) return -1;
+    if (GroupMng_Init() < 0) return -1;
 
     if (ServerNet_Create(port, on_message, on_disconnect) < 0) return -1;
 
@@ -169,7 +169,7 @@ static void handle_create_group(int client_id, const uint8_t *val, uint16_t len)
     char mc_ip[32]   = {0};
     uint16_t mc_port = 0;
 
-    StatusCode status = GroupMng_Create(gname, client_id, mc_ip, &mc_port);
+    StatusCode status = GroupMng_CreateGroup(gname, client_id, mc_ip, &mc_port);
     if (status != STATUS_SUCCESS) {
         send_status(client_id, TAG_CREATE_GROUP_RESP, status);
         return;

@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include "server_net.h"
+#include "server_mng.h"
 
 int main(int argc, char *argv[])
 {
@@ -11,12 +11,12 @@ int main(int argc, char *argv[])
 
     int port = atoi(argv[1]);
 
-    if (ServerNet_Create(port, NULL, NULL) < 0)
+    if (ServerMng_Create(port) < 0)
         return 1;
 
     printf("Server listening on port %d\n", port);
-    ServerNet_Run();
-    ServerNet_Destroy();
+    ServerMng_Run();
+    ServerMng_Destroy();
 
     return 0;
 }

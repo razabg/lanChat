@@ -47,7 +47,9 @@ int UserMng_Create(void)
     return 0;
 }
 
-/* Frees every User record then destroys both hash maps. */
+/* Called by: UserMng_Destroy via HashMap_ForEach
+   Frees each User record — only called on s_user_hash_by_name to avoid double-free,
+   since both hash maps point to the same User records. */
 static int free_user(const void *key, void *value, void *context)
 {
     (void)key; (void)context;
