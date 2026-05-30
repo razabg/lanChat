@@ -2,6 +2,7 @@
 #define CLIENT_MNG_H
 
 #include "client_net.h"
+#include "client_groups_mng.h"
 
 /* ── Screen state ───────────────────────────────────────────────────────────
  * Tracks which screen the user is currently on.
@@ -30,9 +31,10 @@ typedef enum
  * ─────────────────────────────────────────────────────────────────────────── */
 typedef struct
 {
-    ClientNet   *net;
-    ClientState  state;
-    int          running;
+    ClientNet       *net;
+    ClientGroupsMng *groups;   /* local group tracking — Add/Remove/RemoveAll */
+    ClientState      state;
+    int              running;
 } ClientMng;
 
 /* ── ClientMng_Create ───────────────────────────────────────────────────────

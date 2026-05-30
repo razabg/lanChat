@@ -3,6 +3,7 @@
 #include <string.h>
 #include "client_mng.h"
 #include "client_net.h"
+#include "client_groups_mng.h"
 #include "ui.h"
 #include "../common/protocol.h"
 
@@ -104,6 +105,14 @@ ClientMng *ClientMng_Create(const char *server_ip, uint16_t port)
         return NULL;
     }
 
+    mng->groups = ClientGroupsMng_Create();
+    if (!mng->groups)
+    {
+        ClientNet_Destroy(mng->net);
+        free(mng);
+        return NULL;
+    }
+
     mng->state   = SCREEN_1;
     mng->running = 1;
 
@@ -114,6 +123,7 @@ ClientMng *ClientMng_Create(const char *server_ip, uint16_t port)
 void ClientMng_Destroy(ClientMng *mng)
 {
     if (!mng) return;
+    ClientGroupsMng_Destroy(mng->groups);
     ClientNet_Destroy(mng->net);
     free(mng);
 }
@@ -320,8 +330,13 @@ static void handle_create_group(ClientMng *mng)
 
     printf("  Multicast IP: %s  Port: %u\n", mc_ip, mc_port);
 
-    /* TODO (Phase 3): ClientGroupsMng_Add(group_name, mc_ip, mc_port)    */
-    /* TODO (Phase 4): launch mc_sender + mc_receiver via gnome-terminal   */
+    ClientGroupsMng_Add(mng->groups, group_name, mc_ip, mc_port);
+
+    /* TODO (Phase 4): launch mc_sender + mc_receiver via gnome-terminal,
+     *   then set PIDs:
+     *   GroupEntry *e = ClientGroupsMng_Find(mng->groups, group_name);
+     *   e->sender_pid   = sender_pid;
+     *   e->receiver_pid = receiver_pid;                                   */
 }
 
 /* ── handle_join_group ────────────────────────────────────────────────────────
@@ -384,8 +399,13 @@ static void handle_join_group(ClientMng *mng)
 
     printf("  Multicast IP: %s  Port: %u\n", mc_ip, mc_port);
 
-    /* TODO (Phase 3): ClientGroupsMng_Add(group_name, mc_ip, mc_port)    */
-    /* TODO (Phase 4): launch mc_sender + mc_receiver via gnome-terminal   */
+    ClientGroupsMng_Add(mng->groups, group_name, mc_ip, mc_port);
+
+    /* TODO (Phase 4): launch mc_sender + mc_receiver via gnome-terminal,
+     *   then set PIDs:
+     *   GroupEntry *e = ClientGroupsMng_Find(mng->groups, group_name);
+     *   e->sender_pid   = sender_pid;
+     *   e->receiver_pid = receiver_pid;                                   */
 }
 
 /* ── handle_leave_group ───────────────────────────────────────────────────────
@@ -435,9 +455,10 @@ static void handle_leave_group(ClientMng *mng)
 
     showMessage(status_to_message(status_val[0]));
 
-    /* TODO (Phase 4): on success, look up group in ClientGroupsMng,
-     *   kill(sender_pid, SIGTERM), kill(receiver_pid, SIGTERM),
-     *   then ClientGroupsMng_Remove(group_name).                          */
+    /* ClientGroupsMng_Remove kills the sender + receiver PIDs internally
+     * before freeing the entry — no need to call kill() here.            */
+    if ((StatusCode)status_val[0] == STATUS_SUCCESS)
+        ClientGroupsMng_Remove(mng->groups, group_name);
 }
 
 /* ── handle_logout ────────────────────────────────────────────────────────────
@@ -481,9 +502,12 @@ static void handle_logout(ClientMng *mng)
 
     showMessage(status_to_message(status_val[0]));
 
-    /* Step 4: on success go back to Screen 1 */
+    /* Step 4: on success — kill all chat windows, clear groups, go to Screen 1 */
     if ((StatusCode)status_val[0] == STATUS_SUCCESS)
+    {
+        ClientGroupsMng_RemoveAll(mng->groups);
         mng->state = SCREEN_1;
+    }
 }
 
 /* ── ClientMng_Run ────────────────────────────────────────────────────────── */
