@@ -3,6 +3,7 @@
 
 #include "client_net.h"
 #include "client_groups_mng.h"
+#include "ui.h"               /* USERNAME_SIZE */
 
 /* ── Screen state ───────────────────────────────────────────────────────────
  * Tracks which screen the user is currently on.
@@ -32,7 +33,8 @@ typedef enum
 typedef struct
 {
     ClientNet       *net;
-    ClientGroupsMng *groups;   /* local group tracking — Add/Remove/RemoveAll */
+    ClientGroupsMng *groups;              /* local group tracking            */
+    char             username[USERNAME_SIZE]; /* stored on login, passed to mc_sender */
     ClientState      state;
     int              running;
 } ClientMng;

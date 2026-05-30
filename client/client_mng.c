@@ -1,11 +1,18 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <mqueue.h>
+#include <sys/stat.h>
 #include "client_mng.h"
 #include "client_net.h"
 #include "client_groups_mng.h"
 #include "ui.h"
 #include "../common/protocol.h"
+
+/* Queue names must match the defines in mc_receiver.c and mc_sender.c */
+#define MQ_RECEIVER_NAME "/lanchat_rpid"
+#define MQ_SENDER_NAME   "/lanchat_spid"
 
 /* ─── Phase 1: Lifecycle ────────────────────────────────────────────────────
  *
@@ -87,6 +94,101 @@ static const char *status_to_message(uint8_t status)
     }
 }
 
+
+/* ── launch_chat_windows ──────────────────────────────────────────────────────
+ *
+ * Called by handle_create_group and handle_join_group after a successful
+ * server response.  Opens the two chat terminal windows and stores the
+ * resulting PIDs in the group's ClientGroupsMng entry.
+ *
+ * Why two separate message queues (not one)?
+ *   Both mc_receiver and mc_sender send their PID immediately on startup.
+ *   If they shared one queue, whichever process starts first sends first —
+ *   and we can't tell which PID belongs to which role.  Two queues
+ *   eliminate the ambiguity: receiver always goes to MQ_RECEIVER_NAME,
+ *   sender always goes to MQ_SENDER_NAME.
+ *
+ * Flow:
+ *   1. Create both queues (O_CREAT | O_RDONLY — we only read from them).
+ *   2. Launch mc_receiver in a new gnome-terminal window.
+ *   3. Launch mc_sender   in a new gnome-terminal window.
+ *      system() returns as soon as gnome-terminal forks — the child
+ *      processes may not have started yet at this point.
+ *   4. mq_receive() blocks until each process sends its PID.
+ *      No sleep needed — blocking is the correct wait mechanism.
+ *   5. Store PIDs in the GroupEntry via ClientGroupsMng_Find.
+ *   6. Close and unlink both queues — they are single-use.
+ * ─────────────────────────────────────────────────────────────────────────── */
+static void launch_chat_windows(ClientMng *mng, const char *group_name,
+                                const char *mc_ip, uint16_t mc_port)
+{
+    /* Step 1: create both message queues.
+     * mq_maxmsg = 4: small buffer, we only ever send one message each.
+     * mq_msgsize = sizeof(pid_t): each message is exactly one PID.       */
+    struct mq_attr attr;
+    memset(&attr, 0, sizeof(attr));
+    attr.mq_maxmsg  = 4;
+    attr.mq_msgsize = sizeof(pid_t);
+
+    mqd_t mq_r = mq_open(MQ_RECEIVER_NAME, O_CREAT | O_RDONLY, 0600, &attr);
+    if (mq_r == (mqd_t)-1)
+    {
+        perror("launch_chat_windows: mq_open receiver");
+        return;
+    }
+
+    mqd_t mq_s = mq_open(MQ_SENDER_NAME, O_CREAT | O_RDONLY, 0600, &attr);
+    if (mq_s == (mqd_t)-1)
+    {
+        perror("launch_chat_windows: mq_open sender");
+        mq_close(mq_r);
+        mq_unlink(MQ_RECEIVER_NAME);
+        return;
+    }
+
+    /* Step 2: launch mc_receiver — opens its own terminal window.
+     * system() returns as soon as gnome-terminal forks, not when
+     * mc_receiver is ready.  mq_receive() below does the actual waiting. */
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "gnome-terminal -- ./mc_receiver %s %u",
+             mc_ip, (unsigned)mc_port);
+    system(cmd);
+
+    /* Step 3: launch mc_sender — same pattern. */
+    snprintf(cmd, sizeof(cmd),
+             "gnome-terminal -- ./mc_sender %s %u %s",
+             mc_ip, (unsigned)mc_port, mng->username);
+    system(cmd);
+
+    /* Step 4: block until each process sends its PID.
+     * mq_receive() blocks if the queue is empty — no busy-wait or sleep.
+     * The processes send their PID as the very first thing they do, so
+     * this wait is short (just the process startup time).               */
+    pid_t receiver_pid = 0;
+    pid_t sender_pid   = 0;
+
+    if (mq_receive(mq_r, (char *)&receiver_pid, sizeof(pid_t), NULL) < 0)
+        perror("launch_chat_windows: mq_receive receiver");
+
+    if (mq_receive(mq_s, (char *)&sender_pid,   sizeof(pid_t), NULL) < 0)
+        perror("launch_chat_windows: mq_receive sender");
+
+    /* Step 5: write PIDs into the GroupEntry that was just added by Add().
+     * Find returns a live pointer into the map — writing here persists.  */
+    GroupEntry *entry = ClientGroupsMng_Find(mng->groups, group_name);
+    if (entry)
+    {
+        entry->receiver_pid = receiver_pid;
+        entry->sender_pid   = sender_pid;
+    }
+
+    /* Step 6: close and unlink — queues are single-use per group join.   */
+    mq_close(mq_r);
+    mq_close(mq_s);
+    mq_unlink(MQ_RECEIVER_NAME);
+    mq_unlink(MQ_SENDER_NAME);
+}
 
 /* ── ClientMng_Create ─────────────────────────────────────────────────────── */
 ClientMng *ClientMng_Create(const char *server_ip, uint16_t port)
@@ -250,9 +352,13 @@ static void handle_login(ClientMng *mng)
 
     showMessage(status_to_message(status_val[0]));
 
-    /* Only on success: switch to Screen 2 */
+    /* Only on success: store username for mc_sender, switch to Screen 2 */
     if ((StatusCode)status_val[0] == STATUS_SUCCESS)
+    {
+        strncpy(mng->username, cred.username, USERNAME_SIZE - 1);
+        mng->username[USERNAME_SIZE - 1] = '\0';
         mng->state = SCREEN_2;
+    }
 }
 
 /* ── handle_create_group ──────────────────────────────────────────────────────
@@ -331,12 +437,7 @@ static void handle_create_group(ClientMng *mng)
     printf("  Multicast IP: %s  Port: %u\n", mc_ip, mc_port);
 
     ClientGroupsMng_Add(mng->groups, group_name, mc_ip, mc_port);
-
-    /* TODO (Phase 4): launch mc_sender + mc_receiver via gnome-terminal,
-     *   then set PIDs:
-     *   GroupEntry *e = ClientGroupsMng_Find(mng->groups, group_name);
-     *   e->sender_pid   = sender_pid;
-     *   e->receiver_pid = receiver_pid;                                   */
+    launch_chat_windows(mng, group_name, mc_ip, mc_port);
 }
 
 /* ── handle_join_group ────────────────────────────────────────────────────────
@@ -400,12 +501,7 @@ static void handle_join_group(ClientMng *mng)
     printf("  Multicast IP: %s  Port: %u\n", mc_ip, mc_port);
 
     ClientGroupsMng_Add(mng->groups, group_name, mc_ip, mc_port);
-
-    /* TODO (Phase 4): launch mc_sender + mc_receiver via gnome-terminal,
-     *   then set PIDs:
-     *   GroupEntry *e = ClientGroupsMng_Find(mng->groups, group_name);
-     *   e->sender_pid   = sender_pid;
-     *   e->receiver_pid = receiver_pid;                                   */
+    launch_chat_windows(mng, group_name, mc_ip, mc_port);
 }
 
 /* ── handle_leave_group ───────────────────────────────────────────────────────
