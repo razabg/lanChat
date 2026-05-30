@@ -50,7 +50,7 @@ ClientNet *ClientNet_Create(const char *server_ip, uint16_t port)
         free(net);
         return NULL;
     }
-
+    //performs the TCP three-way handshake with the server
     if (connect(net->sockfd, (struct sockaddr *)&server_addr,
                 sizeof(server_addr)) < 0) {
         perror("ClientNet_Create: connect");
@@ -58,7 +58,7 @@ ClientNet *ClientNet_Create(const char *server_ip, uint16_t port)
         free(net);
         return NULL;
     }
-
+    //Zero buf_len so the receive buffer is treated as empty
     net->buf_len = 0;
     return net;
 }

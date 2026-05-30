@@ -9,6 +9,12 @@ static void clearInputBuffer(void)
     while ((c = getchar()) != '\n' && c != EOF);
 }
 
+/* Display a message to the user */
+void showMessage(const char *msg)
+{
+    printf("\n>> %s\n", msg);
+}
+
 /* Display main menu */
 void showMenu(void)
 {
