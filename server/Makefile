@@ -1,4 +1,4 @@
-DS_PATH = $(HOME)/projectsLinux/DS
+DS_PATH = $(HOME)/Documents/Embedded_and_RTOS/DS
 
 CC      = gcc
 CFLAGS  = -Wall -Wextra -g \
