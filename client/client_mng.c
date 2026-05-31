@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <mqueue.h>
@@ -10,9 +11,9 @@
 #include "ui.h"
 #include "../common/protocol.h"
 
-/* Queue names must match the defines in mc_receiver.c and mc_sender.c */
-#define MQ_RECEIVER_NAME "/lanchat_rpid"
-#define MQ_SENDER_NAME   "/lanchat_spid"
+/* Queue name prefix — PID is appended to make them unique per client process */
+#define MQ_RECEIVER_PREFIX "/lanchat_r_"
+#define MQ_SENDER_PREFIX   "/lanchat_s_"
 
 /* ─── Phase 1: Lifecycle ────────────────────────────────────────────────────
  *
@@ -122,60 +123,61 @@ static const char *status_to_message(uint8_t status)
 static void launch_chat_windows(ClientMng *mng, const char *group_name,
                                 const char *mc_ip, uint16_t mc_port)
 {
-    /* Step 1: create both message queues.
-     * mq_maxmsg = 4: small buffer, we only ever send one message each.
-     * mq_msgsize = sizeof(pid_t): each message is exactly one PID.       */
+    /* Step 1: generate unique queue names using our PID so multiple clients
+     * on the same machine don't share queues and mix up each other's PIDs. */
+    char mq_r_name[64], mq_s_name[64];
+    snprintf(mq_r_name, sizeof(mq_r_name), "%s%d", MQ_RECEIVER_PREFIX, getpid());
+    snprintf(mq_s_name, sizeof(mq_s_name), "%s%d", MQ_SENDER_PREFIX,   getpid());
+
     struct mq_attr attr;
     memset(&attr, 0, sizeof(attr));
     attr.mq_maxmsg  = 4;
     attr.mq_msgsize = sizeof(pid_t);
 
-    mqd_t mq_r = mq_open(MQ_RECEIVER_NAME, O_CREAT | O_RDONLY, 0600, &attr);
+    mqd_t mq_r = mq_open(mq_r_name, O_CREAT | O_RDONLY, 0600, &attr);
     if (mq_r == (mqd_t)-1)
     {
         perror("launch_chat_windows: mq_open receiver");
         return;
     }
 
-    mqd_t mq_s = mq_open(MQ_SENDER_NAME, O_CREAT | O_RDONLY, 0600, &attr);
+    mqd_t mq_s = mq_open(mq_s_name, O_CREAT | O_RDONLY, 0600, &attr);
     if (mq_s == (mqd_t)-1)
     {
         perror("launch_chat_windows: mq_open sender");
         mq_close(mq_r);
-        mq_unlink(MQ_RECEIVER_NAME);
+        mq_unlink(mq_r_name);
         return;
     }
 
-    /* Step 2: launch mc_receiver — opens its own terminal window.
-     * system() returns as soon as gnome-terminal forks, not when
-     * mc_receiver is ready.  mq_receive() below does the actual waiting. */
-    char cmd[256];
+    /* Step 2: pass queue names as arguments so each child writes to the
+     * correct queue. Use bash -c so mc_receiver's parent is bash (unique
+     * per window) — killing bash closes the window without affecting others. */
+    char cmd[512];
+    /* --wait makes gnome-terminal close when mc_receiver exits.
+     * & backgrounds it so system() returns immediately.               */
     snprintf(cmd, sizeof(cmd),
-             "gnome-terminal -- ./mc_receiver %s %u",
-             mc_ip, (unsigned)mc_port);
+             "gnome-terminal --title '[%s] receiver' --wait -- bash -c './mc_receiver %s %u %s' &",
+             group_name, mc_ip, (unsigned)mc_port, mq_r_name);
     system(cmd);
 
     /* Step 3: launch mc_sender — same pattern. */
     snprintf(cmd, sizeof(cmd),
-             "gnome-terminal -- ./mc_sender %s %u %s",
-             mc_ip, (unsigned)mc_port, mng->username);
+             "gnome-terminal --title '[%s] sender' --wait -- bash -c './mc_sender %s %u %s %s' &",
+             group_name, mc_ip, (unsigned)mc_port, mng->username, mq_s_name);
     system(cmd);
 
-    /* Step 4: block until each process sends its PID.
-     * mq_receive() blocks if the queue is empty — no busy-wait or sleep.
-     * The processes send their PID as the very first thing they do, so
-     * this wait is short (just the process startup time).               */
+    /* Step 4: block until each process sends its PID. */
     pid_t receiver_pid = 0;
     pid_t sender_pid   = 0;
 
     if (mq_receive(mq_r, (char *)&receiver_pid, sizeof(pid_t), NULL) < 0)
         perror("launch_chat_windows: mq_receive receiver");
 
-    if (mq_receive(mq_s, (char *)&sender_pid,   sizeof(pid_t), NULL) < 0)
+    if (mq_receive(mq_s, (char *)&sender_pid, sizeof(pid_t), NULL) < 0)
         perror("launch_chat_windows: mq_receive sender");
 
-    /* Step 5: write PIDs into the GroupEntry that was just added by Add().
-     * Find returns a live pointer into the map — writing here persists.  */
+    /* Step 5: store PIDs in the GroupEntry. */
     GroupEntry *entry = ClientGroupsMng_Find(mng->groups, group_name);
     if (entry)
     {
@@ -183,11 +185,11 @@ static void launch_chat_windows(ClientMng *mng, const char *group_name,
         entry->sender_pid   = sender_pid;
     }
 
-    /* Step 6: close and unlink — queues are single-use per group join.   */
+    /* Step 6: close and unlink — queues are single-use per group join. */
     mq_close(mq_r);
     mq_close(mq_s);
-    mq_unlink(MQ_RECEIVER_NAME);
-    mq_unlink(MQ_SENDER_NAME);
+    mq_unlink(mq_r_name);
+    mq_unlink(mq_s_name);
 }
 
 /* ── ClientMng_Create ─────────────────────────────────────────────────────── */

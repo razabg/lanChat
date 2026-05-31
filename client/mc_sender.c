@@ -22,7 +22,7 @@
  *   3. Enter the read-send loop.  On SIGTERM — exit cleanly.
  */
 
-#define MQ_NAME      "/lanchat_spid"  /* sender-specific queue — no race with receiver */
+/* Queue name is passed as argv[4] — unique per client process */
 #define MSG_BUF_SIZE  512             /* max bytes a user can type per line             */
 
 /* ─── Phase 3 helper: SIGTERM handler ──────────────────────────────────────
@@ -36,22 +36,24 @@ static volatile sig_atomic_t running = 1;
 
 static void sigterm_handler(int sig)
 {
-    (void)sig;   /* suppress unused-parameter warning */
+    (void)sig;
     running = 0;
+    close(STDIN_FILENO);  /* unblock fgets() immediately so the loop exits */
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
 int main(int argc, char *argv[])
 {
-    if (argc != 4)
+    if (argc != 5)
     {
-        fprintf(stderr, "Usage: %s <mc_ip> <mc_port> <username>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <mc_ip> <mc_port> <username> <mq_name>\n", argv[0]);
         return EXIT_FAILURE;
     }
 
     const char *mc_ip    = argv[1];
     int         mc_port  = atoi(argv[2]);
     const char *username = argv[3];
+    const char *mq_name  = argv[4];
 
     if (mc_port <= 0 || mc_port > 65535)
     {
@@ -70,7 +72,7 @@ int main(int argc, char *argv[])
      *
      * We close the queue immediately after sending — we no longer need it.
      * ─────────────────────────────────────────────────────────────────────── */
-    mqd_t mq = mq_open(MQ_NAME, O_WRONLY);
+    mqd_t mq = mq_open(mq_name, O_WRONLY);
     if (mq == (mqd_t)-1)
     {
         perror("mc_sender: mq_open");

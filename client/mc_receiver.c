@@ -27,7 +27,7 @@
  *      socket, exit cleanly.
  */
 
-#define MQ_NAME      "/lanchat_rpid"  /* receiver-specific queue — no race with sender */
+/* Queue name is passed as argv[3] — unique per client process */
 #define MSG_BUF_SIZE  512
 
 /* ─── Phase 3 helper: SIGTERM handler ──────────────────────────────────────
@@ -38,24 +38,27 @@
  * The main loop detects this and breaks out to do the cleanup.
  * ─────────────────────────────────────────────────────────────────────────── */
 static volatile sig_atomic_t running = 1;
+static int g_sock = -1;  /* global so SIGTERM handler can close it */
 
 static void sigterm_handler(int sig)
 {
     (void)sig;
     running = 0;
+    if (g_sock >= 0) close(g_sock);  /* unblock recvfrom() immediately */
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
 int main(int argc, char *argv[])
 {
-    if (argc != 3)
+    if (argc != 4)
     {
-        fprintf(stderr, "Usage: %s <mc_ip> <mc_port>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <mc_ip> <mc_port> <mq_name>\n", argv[0]);
         return EXIT_FAILURE;
     }
 
     const char *mc_ip   = argv[1];
     int         mc_port = atoi(argv[2]);
+    const char *mq_name = argv[3];
 
     if (mc_port <= 0 || mc_port > 65535)
     {
@@ -76,7 +79,7 @@ int main(int argc, char *argv[])
      * read both PIDs and identify them (e.g. by reading receiver first
      * since it is launched first).
      * ─────────────────────────────────────────────────────────────────────── */
-    mqd_t mq = mq_open(MQ_NAME, O_WRONLY);
+    mqd_t mq = mq_open(mq_name, O_WRONLY);
     if (mq == (mqd_t)-1)
     {
         perror("mc_receiver: mq_open");
@@ -120,7 +123,8 @@ int main(int argc, char *argv[])
      * ─────────────────────────────────────────────────────────────────────── */
 
     /* Step A: create UDP socket */
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    g_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int sock = g_sock;
     if (sock < 0)
     {
         perror("mc_receiver: socket");

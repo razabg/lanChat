@@ -196,7 +196,6 @@ int ClientGroupsMng_Remove(ClientGroupsMng *mng, const char *group_name)
 
     GroupEntry *entry = (GroupEntry *)out_value;
 
-    /* Kill processes before freeing the entry that holds their PIDs */
     if (entry->sender_pid > 0)   kill(entry->sender_pid,   SIGTERM);
     if (entry->receiver_pid > 0) kill(entry->receiver_pid, SIGTERM);
 

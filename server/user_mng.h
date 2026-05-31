@@ -60,4 +60,9 @@ void UserMng_LogoutByClientId(int client_id);
  */
 User *UserMng_GetByClientId(int client_id);
 
+/**
+ * @brief Print all registered users and their current status to stdout
+ */
+void UserMng_Dump(void);
+
 #endif /* USER_MNG_H */

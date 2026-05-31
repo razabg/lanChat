@@ -6,9 +6,9 @@
 #include "server_net.h"
 #include "user_mng.h"
 #include "group_mng.h"
+#include "logger.h"
 #include "../common/protocol.h"
 
-#define MAX_NAME_LEN  64
 #define MAX_MSG_SIZE  512
 
 /* ─── Forward declarations ─────────────────────────────────────────────── */
@@ -111,6 +111,11 @@ static void on_message(int client_id, const uint8_t *msg, int msg_len)
 /* Handles abrupt disconnects — removes user from all groups and logs them out. */
 static void on_disconnect(int client_id)
 {
+    User *user = UserMng_GetByClientId(client_id);
+    if (user)
+        log_event(LOG_WARN, "ServerMng", "client %d ('%s') disconnected abruptly", client_id, user->username);
+    else
+        log_event(LOG_WARN, "ServerMng", "client %d disconnected (not logged in)", client_id);
     GroupMng_RemoveClientFromAll(client_id);
     UserMng_LogoutByClientId(client_id);
 }
@@ -131,6 +136,10 @@ static void handle_register(int client_id, const uint8_t *val, uint16_t len)
     memcpy(pword, password, password_len);
 
     StatusCode status = UserMng_Register(uname, pword);
+    if (status == STATUS_SUCCESS)
+        log_event(LOG_INFO, "ServerMng", "user '%s' registered", uname);
+    else
+        log_event(LOG_WARN, "ServerMng", "register failed for '%s' (status=%d)", uname, status);
     send_status(client_id, TAG_REGISTER_RESP, status);
 }
 
@@ -148,11 +157,18 @@ static void handle_login(int client_id, const uint8_t *val, uint16_t len)
     memcpy(pword, password, password_len);
 
     StatusCode status = UserMng_Login(uname, pword, client_id);
+    if (status == STATUS_SUCCESS)
+        log_event(LOG_INFO, "ServerMng", "user '%s' logged in (client %d)", uname, client_id);
+    else
+        log_event(LOG_WARN, "ServerMng", "login failed for '%s' (status=%d)", uname, status);
     send_status(client_id, TAG_LOGIN_RESP, status);
 }
 
 static void handle_logout(int client_id)
 {
+    User *user = UserMng_GetByClientId(client_id);
+    if (user)
+        log_event(LOG_INFO, "ServerMng", "user '%s' logged out (client %d)", user->username, client_id);
     GroupMng_RemoveClientFromAll(client_id);
     UserMng_LogoutByClientId(client_id);
     send_status(client_id, TAG_LOGOUT_RESP, STATUS_SUCCESS);
@@ -171,10 +187,12 @@ static void handle_create_group(int client_id, const uint8_t *val, uint16_t len)
 
     StatusCode status = GroupMng_CreateGroup(gname, client_id, mc_ip, &mc_port);
     if (status != STATUS_SUCCESS) {
+        log_event(LOG_WARN, "ServerMng", "create group '%s' failed (status=%d)", gname, status);
         send_status(client_id, TAG_CREATE_GROUP_RESP, status);
         return;
     }
 
+    log_event(LOG_INFO, "ServerMng", "group '%s' created (IP=%s port=%u)", gname, mc_ip, mc_port);
     send_group_resp(client_id, TAG_CREATE_GROUP_RESP, mc_ip, mc_port);
 }
 
@@ -191,10 +209,12 @@ static void handle_join_group(int client_id, const uint8_t *val, uint16_t len)
 
     StatusCode status = GroupMng_Join(gname, client_id, mc_ip, &mc_port);
     if (status != STATUS_SUCCESS) {
+        log_event(LOG_WARN, "ServerMng", "join group '%s' failed (status=%d)", gname, status);
         send_status(client_id, TAG_JOIN_GROUP_RESP, status);
         return;
     }
 
+    log_event(LOG_INFO, "ServerMng", "client %d joined group '%s'", client_id, gname);
     send_group_resp(client_id, TAG_JOIN_GROUP_RESP, mc_ip, mc_port);
 }
 
@@ -207,5 +227,9 @@ static void handle_leave_group(int client_id, const uint8_t *val, uint16_t len)
     memcpy(gname, grpname, grpname_len);
 
     StatusCode status = GroupMng_Leave(gname, client_id);
+    if (status == STATUS_SUCCESS)
+        log_event(LOG_INFO, "ServerMng", "client %d left group '%s'", client_id, gname);
+    else
+        log_event(LOG_WARN, "ServerMng", "leave group '%s' failed (status=%d)", gname, status);
     send_status(client_id, TAG_LEAVE_GROUP_RESP, status);
 }

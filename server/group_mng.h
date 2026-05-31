@@ -70,4 +70,9 @@ StatusCode GroupMng_Leave(const char *group_name, int client_id);
  */
 void GroupMng_RemoveClientFromAll(int client_id);
 
+/**
+ * @brief Print all active groups and their members to stdout
+ */
+void GroupMng_Dump(void);
+
 #endif /* GROUP_MNG_H */

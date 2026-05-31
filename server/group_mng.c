@@ -19,13 +19,19 @@
 static HashMap *s_group_hash;
 static Queue   *s_free_mc_ip_queue;
 
+/* ─── RemoveContext — used by RemoveClientFromAll two-pass approach ─────── */
+typedef struct {
+    int   client_id;
+    List *to_destroy;
+} RemoveContext;
+
 /* ─── Forward declarations ─────────────────────────────────────────────── */
 static size_t hash_string(void *key);
 static int    equal_string(void *a, void *b);
 static int    init_mc_ip_pool(void);
 static void   destroy_group(Group *group);
 static int    free_group_cb(const void *key, void *value, void *context);
-static int    remove_client_from_group(Group *group, int client_id);
+static int    remove_client_from_group(Group *group, RemoveContext *ctx);
 static int    remove_client_from_group_cb(const void *key, void *value, void *context);
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -59,6 +65,24 @@ void GroupMng_Destroy(void)
     QueueDestroy(&s_free_mc_ip_queue, free);
 }
 
+static int dump_group_cb(const void *key, void *value, void *context)
+{
+    (void)key; (void)context;
+    Group *group = (Group *)value;
+    printf("  %-20s  members=%-3d  IP=%-15s  port=%u\n",
+           group->group_name,
+           group->member_count,
+           group->mc_ip,
+           group->mc_port);
+    return 1;
+}
+
+void GroupMng_Dump(void)
+{
+    printf("=== GROUPS (%zu active) ===\n", HashMap_Size(s_group_hash));
+    HashMap_ForEach(s_group_hash, dump_group_cb, NULL);
+}
+
 StatusCode GroupMng_CreateGroup(const char *group_name, int client_id,
                                 char *out_mc_ip, uint16_t *out_mc_port)
 {
@@ -74,7 +98,10 @@ StatusCode GroupMng_CreateGroup(const char *group_name, int client_id,
     Group *group = calloc(1, sizeof(Group));
     strncpy(group->group_name, group_name, MAX_NAME_LEN - 1);
     strncpy(group->mc_ip, mc_ip, MAX_IP_LEN - 1);
-    group->mc_port      = MC_PORT_BASE;
+    /* derive unique port from IP's last octet: 239.0.0.X → port 5000+X
+     * ensures each group has both a unique IP and a unique port          */
+    int last_octet = atoi(strrchr(group->mc_ip, '.') + 1);
+    group->mc_port  = (uint16_t)(MC_PORT_BASE + last_octet);
     group->member_count = 1;  /* creator is auto-joined */
     group->members      = ListCreate();
     free(mc_ip);
@@ -117,13 +144,57 @@ StatusCode GroupMng_Leave(const char *group_name, int client_id)
     if (HashMap_Find(s_group_hash, group_name, &val) != MAP_SUCCESS)
         return STATUS_GROUP_NOT_FOUND;
 
-    remove_client_from_group((Group *)val, client_id);
+    Group *group = (Group *)val;
+
+    /* Remove client from member list and decrement count */
+    ListItr itr = ListItrBegin(group->members);
+    ListItr end = ListItrEnd(group->members);
+    while (itr != end) {
+        int *id = (int *)ListItrGet(itr);
+        if (*id == client_id) {
+            free(id);
+            ListItrRemove(itr);
+            group->member_count--;
+            break;
+        }
+        itr = ListItrNext(itr);
+    }
+
+    /* If empty — destroy the group and return IP to pool */
+    if (group->member_count <= 0) {
+        char *ip_copy = strdup(group->mc_ip);
+        void *key, *removed;
+        HashMap_Remove(s_group_hash, group_name, &key, &removed);
+        destroy_group(group);
+        QueueInsert(s_free_mc_ip_queue, ip_copy);
+    }
+
     return STATUS_SUCCESS;
 }
 
 void GroupMng_RemoveClientFromAll(int client_id)
 {
-    HashMap_ForEach(s_group_hash, remove_client_from_group_cb, &client_id);
+    RemoveContext ctx;
+    ctx.client_id  = client_id;
+    ctx.to_destroy = ListCreate();
+
+    /* Pass 1: remove client from all groups, collect empty ones */
+    HashMap_ForEach(s_group_hash, remove_client_from_group_cb, &ctx);
+
+    /* Pass 2: safely destroy empty groups now that ForEach is done */
+    ListItr itr = ListItrBegin(ctx.to_destroy);
+    ListItr end = ListItrEnd(ctx.to_destroy);
+    while (itr != end) {
+        Group *group = (Group *)ListItrGet(itr);
+        char *ip_copy = strdup(group->mc_ip);
+        void *key, *removed;
+        HashMap_Remove(s_group_hash, group->group_name, &key, &removed);
+        destroy_group(group);
+        QueueInsert(s_free_mc_ip_queue, ip_copy);
+        itr = ListItrNext(itr);
+    }
+
+    ListDestroy(&ctx.to_destroy, NULL);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -176,26 +247,23 @@ static int free_group_cb(const void *key, void *value, void *context)
 
 /* Called by: remove_client_from_group_cb
    Removes client_id from a group's member list and decrements member_count.
-   If the group becomes empty, removes it from the hash and returns IP to pool. */
-static int remove_client_from_group(Group *group, int client_id)
+   If the group becomes empty, adds it to ctx->to_destroy instead of modifying
+   the hash during iteration — modifying the hash mid-ForEach causes a crash. */
+static int remove_client_from_group(Group *group, RemoveContext *ctx)
 {
     ListItr itr = ListItrBegin(group->members);
     ListItr end = ListItrEnd(group->members);
 
     while (itr != end) {
         int *id = (int *)ListItrGet(itr);
-        if (*id == client_id) {
+        if (*id == ctx->client_id) {
             free(id);
             ListItrRemove(itr);
             group->member_count--;
 
-            if (group->member_count <= 0) {
-                char *ip_copy = strdup(group->mc_ip);
-                void *key, *removed;
-                HashMap_Remove(s_group_hash, group->group_name, &key, &removed);
-                destroy_group(group);
-                QueueInsert(s_free_mc_ip_queue, ip_copy);
-            }
+            if (group->member_count <= 0)
+                ListPushHead(ctx->to_destroy, group);
+
             return 1;
         }
         itr = ListItrNext(itr);
@@ -208,6 +276,6 @@ static int remove_client_from_group(Group *group, int client_id)
 static int remove_client_from_group_cb(const void *key, void *value, void *context)
 {
     (void)key;
-    remove_client_from_group((Group *)value, *(int *)context);
+    remove_client_from_group((Group *)value, (RemoveContext *)context);
     return 1;
 }

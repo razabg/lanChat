@@ -98,9 +98,9 @@ StatusCode UserMng_Login(const char *username, const char *password, int client_
     user->is_active = 1;
     user->client_id = client_id;
 
-    /* build string key for client_id hash e.g. "3" */
-    char id_key[16];
-    snprintf(id_key, sizeof(id_key), "%d", client_id);
+    /* heap-allocate the key so it persists after this function returns */
+    char *id_key = malloc(16);
+    snprintf(id_key, 16, "%d", client_id);
     HashMap_Insert(s_user_hash_by_client_id, id_key, user);
 
     return STATUS_SUCCESS;
@@ -118,6 +118,7 @@ void UserMng_LogoutByClientId(int client_id)
     snprintf(id_key, sizeof(id_key), "%d", client_id);
     void *key, *val;
     HashMap_Remove(s_user_hash_by_client_id, id_key, &key, &val);
+    free(key);  /* free the heap-allocated key from UserMng_Login */
 }
 
 /* Iterates s_user_hash_by_client_id to find the user with matching client_id. */
@@ -128,4 +129,21 @@ User *UserMng_GetByClientId(int client_id)
     void *val = NULL;
     HashMap_Find(s_user_hash_by_client_id, id_key, &val);
     return (User *)val;
+}
+
+static int dump_user_cb(const void *key, void *value, void *context)
+{
+    (void)key; (void)context;
+    User *user = (User *)value;
+    printf("  %-20s  %s  client_id=%d\n",
+           user->username,
+           user->is_active ? "ONLINE " : "offline",
+           user->client_id);
+    return 1;
+}
+
+void UserMng_Dump(void)
+{
+    printf("=== USERS (%zu registered) ===\n", HashMap_Size(s_user_hash_by_name));
+    HashMap_ForEach(s_user_hash_by_name, dump_user_cb, NULL);
 }

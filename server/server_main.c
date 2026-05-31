@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "server_mng.h"
+#include "logger.h"
 
 int main(int argc, char *argv[])
 {
@@ -14,7 +15,8 @@ int main(int argc, char *argv[])
     if (ServerMng_Create(port) < 0)
         return 1;
 
-    printf("Server listening on port %d\n", port);
+    log_event(LOG_INFO, "Server", "listening on port %d", port);
+
     ServerMng_Run();
     ServerMng_Destroy();
 

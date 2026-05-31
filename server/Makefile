@@ -9,7 +9,7 @@ CFLAGS  = -Wall -Wextra -g \
 LDFLAGS = -L$(DS_PATH) -lds -Wl,-rpath,$(DS_PATH)
 
 SRCS = server_main.c server_net.c server_mng.c user_mng.c group_mng.c \
-       ../common/protocol.c
+       logger.c ../common/protocol.c
 OBJS = $(SRCS:.c=.o)
 TARGET = chat_server
 
