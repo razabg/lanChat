@@ -60,6 +60,13 @@ typedef enum {
 #define MAX_TLV_VALUE_SIZE 512
 #define MAX_TLV_SIZE       (TLV_HEADER_SIZE + MAX_TLV_VALUE_SIZE)
 
+/* ─── Protocol Result Codes ────────────────────────────────────────────────*/
+typedef enum {
+    PROTOCOL_SUCCESS,
+    PROTOCOL_FIELD_NOT_FOUND,
+    PROTOCOL_MALFORMED
+} ProtocolResult;
+
 /* ─── Function Signatures ──────────────────────────────────────────────────*/
 
 /*
@@ -82,11 +89,11 @@ int tlv_decode(const uint8_t *buf, size_t buf_len,
 /*
  * Searches a value block (the inner bytes of a message) for a field tag.
  * On success: sets out_value and out_value_len for that field.
- * Returns 0 on success, -1 if the tag is not found.
+ * Returns PROTOCOL_SUCCESS, PROTOCOL_FIELD_NOT_FOUND, or PROTOCOL_MALFORMED.
  */
-int tlv_find_field(const uint8_t *value_block, uint16_t block_len,
-                   uint8_t field_tag, const uint8_t **out_value,
-                   uint16_t *out_value_len);
+ProtocolResult tlv_find_field(const uint8_t *value_block, uint16_t block_len,
+                               uint8_t field_tag, const uint8_t **out_value,
+                               uint16_t *out_value_len);
 
 
                    

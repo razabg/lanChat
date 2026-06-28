@@ -99,30 +99,43 @@ int main(int argc, char *argv[])
 
     /* ── Phase 2: UDP socket setup ───────────────────────────────────────────
      *
-     * Step A — SOCK_DGRAM (UDP):
+     * Step A — parse the multicast IP once into mc_addr (struct in_addr).
+     *   Done early so the same binary value can be reused in both bind()
+     *   and IP_ADD_MEMBERSHIP — no need to parse the string twice.
+     *
+     * Step B — SOCK_DGRAM (UDP):
      *   Multicast uses UDP.  No connection, no handshake.
      *
-     * Step B — SO_REUSEADDR:
+     * Step C — SO_REUSEADDR:
      *   Allows multiple sockets on the same machine to bind to the same
      *   port.  Without this, only ONE receiver per machine could bind to
      *   port mc_port.  With it, every client on the same host can receive
      *   the same multicast traffic.
      *
-     * Step C — bind(INADDR_ANY, mc_port):
-     *   We bind to the port on ALL local interfaces, not to the multicast
-     *   IP itself.  This is the correct Linux pattern for multicast reception.
-     *   Binding to the MC IP directly is unreliable across implementations.
-     *   The IP_ADD_MEMBERSHIP below handles which multicast group we join.
+     * Step D — bind(mc_addr, mc_port):
+     *   We bind to the specific multicast IP, not INADDR_ANY.  All groups
+     *   share the same port (MC_PORT_BASE), so the destination IP is what
+     *   separates group A's traffic from group B's at the socket level.
+     *   A socket bound to 239.0.0.1:5000 will not receive packets sent
+     *   to 239.0.0.2:5000 even though both share port 5000.
      *
-     * Step D — IP_ADD_MEMBERSHIP:
-     *   This is the key multicast call.  It tells the kernel:
-     *     "Deliver UDP packets addressed to mc_ip to my socket."
-     *   imr_multiaddr = the multicast group IP  (e.g. 239.0.0.5)
+     * Step E — IP_ADD_MEMBERSHIP:
+     *   Subscribes to the multicast group at the network layer.  Without
+     *   this call, the kernel never delivers multicast packets to this
+     *   socket regardless of what bind() says.
+     *   imr_multiaddr = the group to join (reuses mc_addr)
      *   imr_interface = INADDR_ANY = let the OS pick the local interface
-     *   Without this call, no multicast packets would ever arrive.
      * ─────────────────────────────────────────────────────────────────────── */
 
-    /* Step A: create UDP socket */
+    /* Step A: parse MC IP string → binary, reused in bind and IP_ADD_MEMBERSHIP */
+    struct in_addr mc_addr;
+    if (inet_pton(AF_INET, mc_ip, &mc_addr) <= 0)
+    {
+        fprintf(stderr, "mc_receiver: bad multicast IP '%s'\n", mc_ip);
+        return EXIT_FAILURE;
+    }
+
+    /* Step B: create UDP socket */
     g_sock = socket(AF_INET, SOCK_DGRAM, 0);
     int sock = g_sock;
     if (sock < 0)
@@ -131,7 +144,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    /* Step B: allow multiple receivers on the same port */
+    /* Step C: allow multiple receivers on the same port */
     int reuse = 1;
     if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
     {
@@ -140,12 +153,12 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    /* Step C: bind to the multicast port on all interfaces */
+    /* Step D: bind to the specific multicast IP + shared port */
     struct sockaddr_in local_addr;
     memset(&local_addr, 0, sizeof(local_addr));
-    local_addr.sin_family      = AF_INET;
-    local_addr.sin_port        = htons((uint16_t)mc_port);
-    local_addr.sin_addr.s_addr = INADDR_ANY;  /* all interfaces */
+    local_addr.sin_family = AF_INET;
+    local_addr.sin_port   = htons((uint16_t)mc_port);
+    local_addr.sin_addr   = mc_addr;  /* specific MC IP — filters other groups */
 
     if (bind(sock, (struct sockaddr *)&local_addr, sizeof(local_addr)) < 0)
     {
@@ -154,17 +167,11 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    /* Step D: join the multicast group */
+    /* Step E: join the multicast group */
     struct ip_mreq mreq;
     memset(&mreq, 0, sizeof(mreq));
-    mreq.imr_interface.s_addr = INADDR_ANY;  /* use the default interface */
-
-    if (inet_pton(AF_INET, mc_ip, &mreq.imr_multiaddr) <= 0)
-    {
-        fprintf(stderr, "mc_receiver: bad multicast IP '%s'\n", mc_ip);
-        close(sock);
-        return EXIT_FAILURE;
-    }
+    mreq.imr_multiaddr        = mc_addr;       /* reuse — already parsed in Step A */
+    mreq.imr_interface.s_addr = INADDR_ANY;    /* let OS pick the interface */
 
     if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0)
     {

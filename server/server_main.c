@@ -5,20 +5,24 @@
 
 int main(int argc, char *argv[])
 {
-    if (argc < 2) {
+    if (argc < 2)
+    {
         fprintf(stderr, "Usage: %s <port>\n", argv[0]);
         return 1;
     }
 
     int port = atoi(argv[1]);
 
-    if (ServerMng_Create(port) < 0)
+    ServerMng *mng = ServerMng_Create(port);
+    if (!mng)
+    {
         return 1;
+    }
 
     log_event(LOG_INFO, "Server", "listening on port %d", port);
 
-    ServerMng_Run();
-    ServerMng_Destroy();
+    ServerMng_Run(mng);
+    ServerMng_Destroy(&mng);
 
     return 0;
 }
